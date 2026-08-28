@@ -1,4 +1,5 @@
 import io
+import json
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -11,76 +12,227 @@ st.set_page_config(
 )
 
 # =========================================================
+# Defaults
+# =========================================================
+DEFAULTS = {
+    # Global
+    "seed": 2024,
+
+    # Model distortion controls: Liquid controls oil/water consistency
+    "liq_quality": 0.82,
+    "liq_global_bias": 0,
+    "liq_early_bias": 4,
+    "liq_late_bias": -3,
+    "liq_lag": 0,
+    "liq_smoothness": 13,
+    "liq_noise": 0.012,
+    "liq_offzones": 4,
+    "liq_offstrength": 0.06,
+
+    # WCUT controls
+    "wcut_quality": 0.86,
+    "wcut_global_bias": 0,
+    "wcut_early_bias": -3,
+    "wcut_late_bias": 2,
+    "wcut_lag": 0,
+    "wcut_smoothness": 11,
+    "wcut_noise": 0.008,
+    "wcut_offzones": 3,
+    "wcut_offstrength": 0.035,
+
+    # GOR controls
+    "gor_quality": 0.78,
+    "gor_global_bias": 0,
+    "gor_early_bias": 5,
+    "gor_late_bias": -4,
+    "gor_lag": 0,
+    "gor_smoothness": 13,
+    "gor_noise": 0.015,
+    "gor_offzones": 4,
+    "gor_offstrength": 0.06,
+
+    # Pressure controls
+    "prs_quality": 0.84,
+    "prs_global_bias": 0,
+    "prs_early_bias": 2,
+    "prs_late_bias": -2,
+    "prs_lag": 0,
+    "prs_smoothness": 17,
+    "prs_noise": 0.006,
+    "prs_offzones": 3,
+    "prs_offstrength": 0.025,
+
+    # Display controls
+    "oil_dot_size": 7,
+    "oil_dot_stride": 2,
+    "oil_meas_color": "#d97a6c",
+    "oil_model_color": "#2fa84f",
+
+    "gas_dot_size": 7,
+    "gas_dot_stride": 2,
+    "gas_meas_color": "#d97a6c",
+    "gas_model_color": "#e96be0",
+
+    "water_dot_size": 7,
+    "water_dot_stride": 2,
+    "water_meas_color": "#d97a6c",
+    "water_model_color": "#0b3c8c",
+
+    "wcut_dot_size": 7,
+    "wcut_dot_stride": 2,
+    "wcut_meas_color": "#d97a6c",
+    "wcut_model_color": "#e96be0",
+
+    "gor_dot_size": 7,
+    "gor_dot_stride": 2,
+    "gor_meas_color": "#d97a6c",
+    "gor_model_color": "#e96be0",
+
+    "prs_dot_size": 7,
+    "prs_dot_stride": 3,
+    "prs_meas_color": "#d97a6c",
+    "prs_model_color": "#6f35a5",
+
+    "cum_dot_size": 7,
+    "cum_dot_stride": 3,
+    "cum_meas_color": "#d97a6c",
+    "cum_model_color": "#2fa84f",
+
+    # Water-Oil Corey defaults
+    "swc_b": 0.25,
+    "sorw_b": 0.22,
+    "krw_end_b": 0.95,
+    "krow_end_b": 1.00,
+    "nw_b": 2.60,
+    "no_b": 2.10,
+
+    "swc_a": 0.30,
+    "sorw_a": 0.22,
+    "krw_end_a": 0.60,
+    "krow_end_a": 0.96,
+    "nw_a": 3.80,
+    "no_a": 3.20,
+
+    # Gas-Oil Corey defaults
+    "sgc_b": 0.05,
+    "sorg_b": 0.25,
+    "krg_end_b": 1.00,
+    "krog_end_b": 1.00,
+    "ng_b": 3.00,
+    "nog_b": 2.00,
+
+    "sgc_a": 0.08,
+    "sorg_a": 0.28,
+    "krg_end_a": 0.72,
+    "krog_end_a": 0.96,
+    "ng_a": 4.00,
+    "nog_a": 2.80,
+}
+
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# =========================================================
 # Helper functions
 # =========================================================
 def rolling_np(values, window):
+    window = max(1, int(window))
     return pd.Series(values).rolling(window, min_periods=1, center=True).mean().to_numpy()
 
 
 def ema_np(values, span):
+    span = max(2, int(span))
     return pd.Series(values).ewm(span=span, adjust=False).mean().to_numpy()
 
 
-def smooth_noise(n, rng, scale=1.0, smooth_window=9):
-    raw = rng.normal(0, scale, n)
-    return rolling_np(raw, smooth_window)
+def shift_curve(values, lag):
+    values = np.asarray(values, dtype=float)
+    idx = np.arange(len(values))
+    return np.interp(idx - lag, idx, values, left=values[0], right=values[-1])
 
 
-def make_realistic_model_from_measured(
+def add_smooth_offzones(model, measured, count, strength, seed):
+    rng = np.random.default_rng(seed)
+    n = len(model)
+    idx = np.arange(n)
+    scale = max(np.nanmax(measured) - np.nanmin(measured), 1.0)
+
+    out = model.copy()
+
+    for _ in range(int(count)):
+        center = rng.integers(8, max(10, n - 8))
+        width = rng.integers(6, 22)
+        sign = rng.choice([-1, 1])
+        amp = scale * strength * rng.uniform(0.55, 1.20)
+        bump = np.exp(-0.5 * ((idx - center) / width) ** 2)
+        out += sign * amp * bump
+
+    return out
+
+
+def build_model_curve(
     measured,
-    quality=0.82,           # 1.0 => better match, 0.0 => poorer match
-    bias_pct=0.0,           # global bias
-    smoothness=11,          # higher => smoother model
-    noise_factor=0.025,     # low-amplitude smooth noise
-    mismatch_count=4,       # number of off-zones
-    mismatch_strength=0.08, # amplitude of off-zones
-    seed=2024,
+    quality,
+    global_bias,
+    early_bias,
+    late_bias,
+    lag,
+    smoothness,
+    noise,
+    offzones,
+    offstrength,
+    seed,
+    min_value=0,
+    max_value=None,
 ):
     rng = np.random.default_rng(seed)
     measured = np.asarray(measured, dtype=float)
     n = len(measured)
+    progress = np.linspace(0, 1, n)
 
-    ymin = np.nanmin(measured)
-    ymax = np.nanmax(measured)
-    scale = max(ymax - ymin, 1.0)
+    shifted = shift_curve(measured, lag)
 
-    short_trend = rolling_np(measured, max(3, smoothness // 2))
-    long_trend  = rolling_np(measured, smoothness)
-    ema_trend   = ema_np(measured, max(4, smoothness))
+    short = rolling_np(shifted, max(3, smoothness // 2))
+    long = rolling_np(shifted, smoothness)
+    ema = ema_np(shifted, smoothness)
 
-    # Smooth backbone
-    base_model = 0.45 * short_trend + 0.35 * long_trend + 0.20 * ema_trend
+    backbone = 0.35 * short + 0.45 * long + 0.20 * ema
 
-    # Smooth low-frequency noise
-    lf_noise = smooth_noise(
-        n,
-        rng,
-        scale=noise_factor * scale * (1.20 - 0.70 * quality),
-        smooth_window=max(5, smoothness)
+    bias_profile = global_bias + early_bias * (1 - progress) + late_bias * progress
+    biased = backbone * (1 + bias_profile / 100.0)
+
+    scale = max(np.nanmax(measured) - np.nanmin(measured), 1.0)
+    smooth_noise = rolling_np(rng.normal(0, noise * scale, n), max(5, smoothness))
+    distorted = biased + smooth_noise
+
+    distorted = add_smooth_offzones(
+        distorted,
+        measured,
+        count=offzones,
+        strength=offstrength,
+        seed=seed + 101
     )
 
-    model = base_model * (1 + bias_pct / 100.0) + lf_noise
+    # Blend with measured: high quality -> closer to measured, but still smooth
+    smooth_measured = rolling_np(measured, max(3, smoothness // 2))
+    model = quality * smooth_measured + (1 - quality) * distorted
 
-    # Add a few realistic mismatch windows
-    mismatch_count = max(1, int(mismatch_count))
-    idx = np.arange(n)
-    for _ in range(mismatch_count):
-        center = rng.integers(low=8, high=max(9, n - 8))
-        width = rng.integers(low=5, high=16)
-        sign = rng.choice([-1, 1])
+    model = rolling_np(model, max(3, smoothness // 3))
 
-        local_amp = scale * mismatch_strength * (1.10 - 0.55 * quality) * rng.uniform(0.6, 1.2)
-        bump = np.exp(-0.5 * ((idx - center) / width) ** 2)
-        model += sign * local_amp * bump
+    if max_value is not None:
+        model = np.clip(model, min_value, max_value)
+    else:
+        model = np.clip(model, min_value, None)
 
-    # Pull somewhat toward measured trend without making it perfect
-    pull = 0.55 + 0.30 * quality
-    model = pull * model + (1 - pull) * long_trend
+    return model
 
-    # Final smoothing to suppress unrealistic spikes
-    model = rolling_np(model, max(3, smoothness // 2))
 
-    return np.clip(model, 0, None)
+def calc_cumulative(rate_m3d, dates):
+    days = pd.Series(dates).diff().dt.days.fillna(0).to_numpy()
+    cum_m3 = np.cumsum(rate_m3d * days)
+    return cum_m3 / 1e6  # MMm3
 
 
 def add_history_trace(
@@ -90,8 +242,6 @@ def add_history_trace(
     x,
     measured,
     model,
-    measured_name,
-    model_name,
     y_title,
     measured_color,
     model_color,
@@ -102,37 +252,35 @@ def add_history_trace(
     x_meas = x[::dot_stride]
     y_meas = measured[::dot_stride]
 
-    # Measured = dots only
     fig.add_trace(
         go.Scatter(
             x=x_meas,
             y=y_meas,
             mode="markers",
-            name=measured_name,
+            name="Measured Data",
             marker=dict(
                 color=measured_color,
                 size=dot_size,
                 opacity=0.80,
-                line=dict(color="rgba(70,70,70,0.65)", width=0.8)
+                line=dict(color="rgba(70,70,70,0.55)", width=0.8),
             ),
-            showlegend=show_legend
+            showlegend=show_legend,
         ),
         row=row,
-        col=col
+        col=col,
     )
 
-    # Model = smooth line
     fig.add_trace(
         go.Scatter(
             x=x,
             y=model,
             mode="lines",
-            name=model_name,
+            name="Model",
             line=dict(color=model_color, width=2.8),
-            showlegend=show_legend
+            showlegend=show_legend,
         ),
         row=row,
-        col=col
+        col=col,
     )
 
     fig.update_yaxes(title_text=y_title, row=row, col=col)
@@ -155,6 +303,72 @@ def corey_gas_oil(sg, sgc, sorg, krg_end, krog_end, ng, nog):
     return krg, krog
 
 
+def slider(label, key, min_value, max_value, step):
+    return st.slider(
+        label,
+        min_value,
+        max_value,
+        value=st.session_state[key],
+        step=step,
+        key=key,
+    )
+
+
+def number_input(label, key, min_value, max_value, step):
+    return st.number_input(
+        label,
+        min_value=min_value,
+        max_value=max_value,
+        value=st.session_state[key],
+        step=step,
+        key=key,
+    )
+
+
+def color_picker(label, key):
+    return st.color_picker(label, value=st.session_state[key], key=key)
+
+
+def model_control_group(title, prefix):
+    with st.sidebar.expander(title, expanded=False):
+        quality = slider("Match quality", f"{prefix}_quality", 0.0, 1.0, 0.01)
+        global_bias = slider("Global bias, %", f"{prefix}_global_bias", -30, 30, 1)
+        early_bias = slider("Early-period bias, %", f"{prefix}_early_bias", -30, 30, 1)
+        late_bias = slider("Late-period bias, %", f"{prefix}_late_bias", -30, 30, 1)
+        lag = slider("Lag / lead, quarters", f"{prefix}_lag", -8, 8, 1)
+        smoothness = slider("Model smoothness", f"{prefix}_smoothness", 3, 35, 2)
+        noise = slider("Low-frequency noise", f"{prefix}_noise", 0.0, 0.08, 0.002)
+        offzones = slider("Off-zone count", f"{prefix}_offzones", 0, 8, 1)
+        offstrength = slider("Off-zone strength", f"{prefix}_offstrength", 0.0, 0.25, 0.005)
+
+    return {
+        "quality": quality,
+        "global_bias": global_bias,
+        "early_bias": early_bias,
+        "late_bias": late_bias,
+        "lag": lag,
+        "smoothness": smoothness,
+        "noise": noise,
+        "offzones": offzones,
+        "offstrength": offstrength,
+    }
+
+
+def display_control_group(title, prefix):
+    with st.sidebar.expander(title, expanded=False):
+        dot_size = slider("Measured dot size", f"{prefix}_dot_size", 2, 18, 1)
+        dot_stride = slider("Measured dot density: show every Nth point", f"{prefix}_dot_stride", 1, 12, 1)
+        meas_color = color_picker("Measured dot color", f"{prefix}_meas_color")
+        model_color = color_picker("Model line color", f"{prefix}_model_color")
+
+    return {
+        "dot_size": dot_size,
+        "dot_stride": dot_stride,
+        "meas_color": meas_color,
+        "model_color": model_color,
+    }
+
+
 def make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df):
     output = io.BytesIO()
 
@@ -168,20 +382,19 @@ def make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df):
         header_fmt = workbook.add_format({
             "bold": True,
             "bg_color": "#D9EAF7",
-            "border": 1
+            "border": 1,
         })
 
-        sheets = {
+        for sheet_name, df in {
             "History_Match": history_df,
             "RelPerm_WaterOil": relperm_wo_df,
             "RelPerm_GasOil": relperm_go_df,
-            "Controls": controls_df
-        }
-
-        for sheet_name, df in sheets.items():
+            "Controls": controls_df,
+        }.items():
             ws = writer.sheets[sheet_name]
             ws.freeze_panes(1, 0)
-            ws.set_column(0, len(df.columns) - 1, 20)
+            ws.set_column(0, len(df.columns) - 1, 22)
+
             for c, col in enumerate(df.columns):
                 ws.write(0, c, col, header_fmt)
 
@@ -189,431 +402,259 @@ def make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df):
     return output
 
 
-def variable_controls(label, key, measured_default, model_default, dot_default=7,
-                      quality_default=0.84, smooth_default=11, noise_default=0.02,
-                      mismatch_count_default=4, mismatch_strength_default=0.08,
-                      dot_stride_default=2):
-    with st.sidebar.expander(label, expanded=False):
-        quality = st.slider(
-            f"{label} match quality",
-            0.0, 1.0, quality_default, 0.01,
-            key=f"{key}_quality"
-        )
-
-        bias = st.slider(
-            f"{label} model bias, %",
-            -30, 30, 0, 1,
-            key=f"{key}_bias"
-        )
-
-        smoothness = st.slider(
-            f"{label} model smoothness",
-            3, 31, smooth_default, 2,
-            key=f"{key}_smoothness"
-        )
-
-        noise = st.slider(
-            f"{label} low-frequency noise",
-            0.000, 0.080, noise_default, 0.002,
-            key=f"{key}_noise"
-        )
-
-        mismatch_count = st.slider(
-            f"{label} off-zones count",
-            1, 8, mismatch_count_default, 1,
-            key=f"{key}_mismatch_count"
-        )
-
-        mismatch_strength = st.slider(
-            f"{label} off-zones strength",
-            0.01, 0.25, mismatch_strength_default, 0.01,
-            key=f"{key}_mismatch_strength"
-        )
-
-        dot_size = st.slider(
-            f"{label} measured dot size",
-            2, 18, dot_default, 1,
-            key=f"{key}_dot_size"
-        )
-
-        dot_stride = st.slider(
-            f"{label} measured dot density (show every Nth point)",
-            1, 12, dot_stride_default, 1,
-            key=f"{key}_dot_stride"
-        )
-
-        measured_color = st.color_picker(
-            f"{label} measured dots color",
-            measured_default,
-            key=f"{key}_measured_color"
-        )
-
-        model_color = st.color_picker(
-            f"{label} model line color",
-            model_default,
-            key=f"{key}_model_color"
-        )
-
-    return (
-        quality, bias, smoothness, noise,
-        mismatch_count, mismatch_strength,
-        dot_size, dot_stride,
-        measured_color, model_color
-    )
-
-
-def unpack(ctrl):
-    return {
-        "quality": ctrl[0],
-        "bias": ctrl[1],
-        "smoothness": ctrl[2],
-        "noise": ctrl[3],
-        "mismatch_count": ctrl[4],
-        "mismatch_strength": ctrl[5],
-        "dot_size": ctrl[6],
-        "dot_stride": ctrl[7],
-        "measured_color": ctrl[8],
-        "model_color": ctrl[9],
-    }
-
-
 # =========================================================
-# App title
+# Title
 # =========================================================
-st.title("Zira Field – Artificial History Match & RelPerm Generator")
+st.title("Zira Field – Material-Balanced Artificial History Match & RelPerm Generator")
 st.caption(
-    "Synthetic/artificial curves for draft paper formatting only. "
-    "Replace with final Nexus/OFM/Excel export after real Zira model runs."
+    "Synthetic curves for draft paper formatting only. "
+    "Oil, gas, GOR, water rate, water cut, cumulative oil and pressure are kept physically consistent."
 )
 
 # =========================================================
-# Sidebar global controls
+# Sidebar JSON load
+# =========================================================
+st.sidebar.header("Load / Save Settings")
+
+uploaded_json = st.sidebar.file_uploader("Load saved JSON settings", type=["json"])
+
+if uploaded_json is not None:
+    if st.sidebar.button("Apply loaded JSON"):
+        loaded = json.load(uploaded_json)
+        values = loaded.get("values", loaded)
+
+        for k, v in values.items():
+            if k in DEFAULTS:
+                st.session_state[k] = v
+
+        st.rerun()
+
+if st.sidebar.button("Reset to default settings"):
+    for k, v in DEFAULTS.items():
+        st.session_state[k] = v
+    st.rerun()
+
+# =========================================================
+# Sidebar controls
 # =========================================================
 st.sidebar.header("Global Controls")
+seed = number_input("Random seed", "seed", 1, 99999, 1)
 
-seed = st.sidebar.number_input(
-    "Random seed",
-    min_value=1,
-    max_value=99999,
-    value=2024,
-    step=1
+st.sidebar.header("Model Consistency Controls")
+st.sidebar.caption(
+    "Liquid controls oil/water material balance. "
+    "Gas is derived from Oil × GOR. "
+    "Pressure is linked to cumulative offtake."
 )
 
+liq_cfg = model_control_group("Total Liquid / Oil-Water System", "liq")
+wcut_cfg = model_control_group("Water Cut System", "wcut")
+gor_cfg = model_control_group("GOR / Gas System", "gor")
+prs_cfg = model_control_group("Reservoir Pressure System", "prs")
+
+st.sidebar.header("Display Controls")
+oil_disp = display_control_group("Oil Rate Display", "oil")
+gas_disp = display_control_group("Gas Rate Display", "gas")
+water_disp = display_control_group("Water Rate Display", "water")
+wcut_disp = display_control_group("Water Cut Display", "wcut")
+gor_disp = display_control_group("GOR Display", "gor")
+prs_disp = display_control_group("Pressure Display", "prs")
+cum_disp = display_control_group("Cumulative Oil Display", "cum")
+
 # =========================================================
-# Create synthetic measured data
+# Synthetic measured data with material balance consistency
 # =========================================================
 dates = pd.date_range("1956-01-01", "2024-12-01", freq="QS")
 year = dates.year + (dates.dayofyear - 1) / 365.25
 rng = np.random.default_rng(seed)
 
-# Oil Rate
-oil_peak = 1250 * np.exp(-((year - 1962.2) / 1.55) ** 2)
-oil_tail = 310 * np.exp(-0.075 * np.maximum(year - 1966, 0))
-oil_measured = oil_peak + oil_tail
-oil_measured += rng.normal(0, 25, len(dates))
-oil_measured = np.clip(oil_measured, 0, None)
+# Total liquid rate: early peak + decline + later secondary water-handling hump
+early_liq_peak = 1650 * np.exp(-((year - 1962.0) / 1.55) ** 2)
+liq_tail = 370 * np.exp(-0.052 * np.maximum(year - 1965, 0))
+late_liq_hump = 420 * np.exp(-((year - 2010) / 7.8) ** 2)
+small_ops = 40 * np.sin((year - 1956) / 1.8) * np.exp(-0.025 * np.maximum(year - 1965, 0))
 
-# Gas Rate
-gas_peak = 4200 * np.exp(-((year - 1961.8) / 1.45) ** 2)
-gas_tail = 520 * np.exp(-0.065 * np.maximum(year - 1965, 0))
-gas_measured = gas_peak + gas_tail
-gas_measured += rng.normal(0, 110, len(dates))
-gas_measured = np.clip(gas_measured, 0, None)
+total_liq_measured = early_liq_peak + liq_tail + late_liq_hump + small_ops
+total_liq_measured += rng.normal(0, 28, len(dates))
+total_liq_measured = np.clip(total_liq_measured, 3, None)
 
-# Water Rate
-water_base = 90 * np.exp(-0.025 * np.maximum(year - 1962, 0))
-water_hump = 70 * np.exp(-((year - 2010) / 8.5) ** 2)
-water_measured = water_base + water_hump
-water_measured += rng.normal(0, 9, len(dates))
-water_measured = np.clip(water_measured, 0, None)
+# Water cut: increasing mature field behavior
+wcut_measured = 18 + 80 / (1 + np.exp(-(year - 1967.5) / 3.4))
+wcut_measured += 8 * np.sin((year - 1957) / 2.5) * np.exp(-0.045 * np.maximum(year - 1967, 0))
+wcut_measured += rng.normal(0, 3.2, len(dates))
+wcut_measured = np.clip(wcut_measured, 5, 99)
 
-# Water Cut
-wcut_measured = 20 + 78 / (1 + np.exp(-(year - 1967) / 3.2))
-wcut_measured += 10 * np.sin((year - 1956) / 2.1) * np.exp(-0.035 * np.maximum(year - 1965, 0))
-wcut_measured += rng.normal(0, 4.5, len(dates))
-wcut_measured = np.clip(wcut_measured, 0, 100)
+# Oil and water from material balance
+oil_measured = total_liq_measured * (1 - wcut_measured / 100)
+water_measured = total_liq_measured * (wcut_measured / 100)
 
-# GOR
-gor_peak = 3900 * np.exp(-((year - 1961.5) / 2.25) ** 2)
-gor_tail = 850 * np.exp(-0.055 * np.maximum(year - 1966, 0))
-late_spikes = np.where(
-    year > 1995,
-    rng.choice([0, 0, 0, 250, 700, 1200, 1600], size=len(dates)),
-    0
-)
-gor_measured = gor_peak + gor_tail + late_spikes
-gor_measured += rng.normal(0, 170, len(dates))
-gor_measured = np.clip(gor_measured, 0, None)
+# GOR: high early solution-gas period, then declining/stabilized, no random unrealistic spikes
+gor_measured = 650 + 3600 * np.exp(-((year - 1961.3) / 2.15) ** 2)
+gor_measured += 260 * np.exp(-0.045 * np.maximum(year - 1966, 0))
+gor_measured += 90 * np.sin((year - 1956) / 2.2) * np.exp(-0.02 * np.maximum(year - 1970, 0))
+gor_measured += rng.normal(0, 55, len(dates))
+gor_measured = np.clip(gor_measured, 80, None)
 
-# Reservoir Pressure
-pressure_trend = 142 - 45 * (1 - np.exp(-0.025 * np.maximum(year - 1956, 0)))
-pressure_measured = pressure_trend + rng.normal(0, 2.8, len(dates))
-pressure_measured = np.clip(pressure_measured, 85, 150)
+# Gas rate from Oil × GOR
+# Unit: 10^3 m3/d. Example: oil m3/d * GOR m3/m3 / 1000
+gas_measured = oil_measured * gor_measured / 1000
+
+# Cumulative oil from oil rate
+cum_oil_measured = calc_cumulative(oil_measured, dates)
+
+# Pressure linked to cumulative oil/offtake
+cum_norm = cum_oil_measured / max(cum_oil_measured.max(), 1e-6)
+pressure_base = 145 - 43 * (cum_norm ** 0.72)
+pressure_measured = pressure_base + 2.2 * np.sin((year - 1956) / 4.2)
+pressure_measured += rng.normal(0, 1.8, len(dates))
+pressure_measured = np.clip(pressure_measured, 88, 150)
 
 # =========================================================
-# Sidebar controls for history match
+# Model curves – primary variables first
 # =========================================================
-st.sidebar.header("History Match Controls")
-st.sidebar.caption("1.0 = near-ideal match, 0.0 = poor match")
-
-oil_ctrl = variable_controls(
-    "Oil Rate", "oil",
-    measured_default="#d97a6c",
-    model_default="#2fa84f",
-    dot_default=7,
-    quality_default=0.82,
-    smooth_default=11,
-    noise_default=0.015,
-    mismatch_count_default=3,
-    mismatch_strength_default=0.06,
-    dot_stride_default=2
+total_liq_model = build_model_curve(
+    total_liq_measured,
+    seed=seed + 1,
+    min_value=0,
+    max_value=None,
+    **liq_cfg
 )
 
-gas_ctrl = variable_controls(
-    "Gas Rate", "gas",
-    measured_default="#d97a6c",
-    model_default="#d96adf",
-    dot_default=7,
-    quality_default=0.80,
-    smooth_default=13,
-    noise_default=0.020,
-    mismatch_count_default=4,
-    mismatch_strength_default=0.08,
-    dot_stride_default=2
-)
-
-water_ctrl = variable_controls(
-    "Water Rate", "water",
-    measured_default="#d97a6c",
-    model_default="#103d8f",
-    dot_default=7,
-    quality_default=0.76,
-    smooth_default=9,
-    noise_default=0.018,
-    mismatch_count_default=5,
-    mismatch_strength_default=0.10,
-    dot_stride_default=2
-)
-
-wcut_ctrl = variable_controls(
-    "Water Cut", "wcut",
-    measured_default="#d97a6c",
-    model_default="#e96be0",
-    dot_default=7,
-    quality_default=0.88,
-    smooth_default=11,
-    noise_default=0.010,
-    mismatch_count_default=3,
-    mismatch_strength_default=0.04,
-    dot_stride_default=2
-)
-
-gor_ctrl = variable_controls(
-    "GOR", "gor",
-    measured_default="#d97a6c",
-    model_default="#e96be0",
-    dot_default=7,
-    quality_default=0.72,
-    smooth_default=11,
-    noise_default=0.025,
-    mismatch_count_default=5,
-    mismatch_strength_default=0.10,
-    dot_stride_default=2
-)
-
-pressure_ctrl = variable_controls(
-    "Reservoir Pressure", "pressure",
-    measured_default="#d97a6c",
-    model_default="#6f35a5",
-    dot_default=7,
-    quality_default=0.86,
-    smooth_default=15,
-    noise_default=0.008,
-    mismatch_count_default=3,
-    mismatch_strength_default=0.03,
-    dot_stride_default=3
-)
-
-oil_cfg = unpack(oil_ctrl)
-gas_cfg = unpack(gas_ctrl)
-water_cfg = unpack(water_ctrl)
-wcut_cfg = unpack(wcut_ctrl)
-gor_cfg = unpack(gor_ctrl)
-pressure_cfg = unpack(pressure_ctrl)
-
-# =========================================================
-# Create model history-match curves
-# =========================================================
-oil_model = make_realistic_model_from_measured(
-    oil_measured,
-    quality=oil_cfg["quality"],
-    bias_pct=oil_cfg["bias"],
-    smoothness=oil_cfg["smoothness"],
-    noise_factor=oil_cfg["noise"],
-    mismatch_count=oil_cfg["mismatch_count"],
-    mismatch_strength=oil_cfg["mismatch_strength"],
-    seed=seed + 1
-)
-
-gas_model = make_realistic_model_from_measured(
-    gas_measured,
-    quality=gas_cfg["quality"],
-    bias_pct=gas_cfg["bias"],
-    smoothness=gas_cfg["smoothness"],
-    noise_factor=gas_cfg["noise"],
-    mismatch_count=gas_cfg["mismatch_count"],
-    mismatch_strength=gas_cfg["mismatch_strength"],
-    seed=seed + 2
-)
-
-water_model = make_realistic_model_from_measured(
-    water_measured,
-    quality=water_cfg["quality"],
-    bias_pct=water_cfg["bias"],
-    smoothness=water_cfg["smoothness"],
-    noise_factor=water_cfg["noise"],
-    mismatch_count=water_cfg["mismatch_count"],
-    mismatch_strength=water_cfg["mismatch_strength"],
-    seed=seed + 3
-)
-
-wcut_model = make_realistic_model_from_measured(
+wcut_model = build_model_curve(
     wcut_measured,
-    quality=wcut_cfg["quality"],
-    bias_pct=wcut_cfg["bias"],
-    smoothness=wcut_cfg["smoothness"],
-    noise_factor=wcut_cfg["noise"],
-    mismatch_count=wcut_cfg["mismatch_count"],
-    mismatch_strength=wcut_cfg["mismatch_strength"],
-    seed=seed + 4
+    seed=seed + 2,
+    min_value=1,
+    max_value=99,
+    **wcut_cfg
 )
-wcut_model = np.clip(wcut_model, 0, 100)
 
-gor_model = make_realistic_model_from_measured(
+gor_model = build_model_curve(
     gor_measured,
-    quality=gor_cfg["quality"],
-    bias_pct=gor_cfg["bias"],
-    smoothness=gor_cfg["smoothness"],
-    noise_factor=gor_cfg["noise"],
-    mismatch_count=gor_cfg["mismatch_count"],
-    mismatch_strength=gor_cfg["mismatch_strength"],
-    seed=seed + 5
+    seed=seed + 3,
+    min_value=20,
+    max_value=None,
+    **gor_cfg
 )
 
-pressure_model = make_realistic_model_from_measured(
-    pressure_measured,
-    quality=pressure_cfg["quality"],
-    bias_pct=pressure_cfg["bias"],
-    smoothness=pressure_cfg["smoothness"],
-    noise_factor=pressure_cfg["noise"],
-    mismatch_count=pressure_cfg["mismatch_count"],
-    mismatch_strength=pressure_cfg["mismatch_strength"],
-    seed=seed + 6
+# Derived model values preserving consistency
+oil_model = total_liq_model * (1 - wcut_model / 100)
+water_model = total_liq_model * (wcut_model / 100)
+gas_model = oil_model * gor_model / 1000
+cum_oil_model = calc_cumulative(oil_model, dates)
+
+# Pressure model based on model cumulative oil/offtake, then slightly distorted
+cum_model_norm = cum_oil_model / max(cum_oil_model.max(), 1e-6)
+pressure_consistent_model = 145 - 43 * (cum_model_norm ** 0.72)
+pressure_consistent_model += 1.2 * np.sin((year - 1956) / 5.0)
+
+pressure_model = build_model_curve(
+    pressure_consistent_model,
+    seed=seed + 4,
+    min_value=80,
+    max_value=155,
+    **prs_cfg
 )
-pressure_model = np.clip(pressure_model, 80, 155)
 
 # =========================================================
-# Main history match plot
+# Plot history match
 # =========================================================
 history_fig = make_subplots(
-    rows=3,
+    rows=4,
     cols=2,
+    specs=[
+        [{}, {}],
+        [{}, {}],
+        [{}, {}],
+        [{"colspan": 2}, None],
+    ],
     subplot_titles=(
         "OIL_RATE, m³/d – DATE",
-        "GAS_RATE, Mm³/d – DATE",
+        "GAS_RATE, 10³ m³/d – DATE",
         "WATER_RATE, m³/d – DATE",
         "WCUT, % – DATE",
         "GOR, m³/m³ – DATE",
         "RESERVOIR PRESSURE, bar – DATE",
+        "CUMULATIVE OIL, MMm³ – DATE",
     ),
-    vertical_spacing=0.12,
-    horizontal_spacing=0.08
+    vertical_spacing=0.105,
+    horizontal_spacing=0.08,
 )
 
 add_history_trace(
     history_fig, 1, 1,
     dates, oil_measured, oil_model,
-    "Measured Data", "Model",
     "OIL_RATE, m³/d",
-    oil_cfg["measured_color"],
-    oil_cfg["model_color"],
-    oil_cfg["dot_size"],
-    oil_cfg["dot_stride"],
+    oil_disp["meas_color"], oil_disp["model_color"],
+    oil_disp["dot_size"], oil_disp["dot_stride"],
     show_legend=True
 )
 
 add_history_trace(
     history_fig, 1, 2,
     dates, gas_measured, gas_model,
-    "Measured Data", "Model",
-    "GAS_RATE, Mm³/d",
-    gas_cfg["measured_color"],
-    gas_cfg["model_color"],
-    gas_cfg["dot_size"],
-    gas_cfg["dot_stride"],
+    "GAS_RATE, 10³ m³/d",
+    gas_disp["meas_color"], gas_disp["model_color"],
+    gas_disp["dot_size"], gas_disp["dot_stride"],
     show_legend=False
 )
 
 add_history_trace(
     history_fig, 2, 1,
     dates, water_measured, water_model,
-    "Measured Data", "Model",
     "WATER_RATE, m³/d",
-    water_cfg["measured_color"],
-    water_cfg["model_color"],
-    water_cfg["dot_size"],
-    water_cfg["dot_stride"],
+    water_disp["meas_color"], water_disp["model_color"],
+    water_disp["dot_size"], water_disp["dot_stride"],
     show_legend=False
 )
 
 add_history_trace(
     history_fig, 2, 2,
     dates, wcut_measured, wcut_model,
-    "Measured Data", "Model",
     "WCUT, %",
-    wcut_cfg["measured_color"],
-    wcut_cfg["model_color"],
-    wcut_cfg["dot_size"],
-    wcut_cfg["dot_stride"],
+    wcut_disp["meas_color"], wcut_disp["model_color"],
+    wcut_disp["dot_size"], wcut_disp["dot_stride"],
     show_legend=False
 )
 
 add_history_trace(
     history_fig, 3, 1,
     dates, gor_measured, gor_model,
-    "Measured Data", "Model",
     "GOR, m³/m³",
-    gor_cfg["measured_color"],
-    gor_cfg["model_color"],
-    gor_cfg["dot_size"],
-    gor_cfg["dot_stride"],
+    gor_disp["meas_color"], gor_disp["model_color"],
+    gor_disp["dot_size"], gor_disp["dot_stride"],
     show_legend=False
 )
 
 add_history_trace(
     history_fig, 3, 2,
     dates, pressure_measured, pressure_model,
-    "Measured Data", "Model",
     "P, bar",
-    pressure_cfg["measured_color"],
-    pressure_cfg["model_color"],
-    pressure_cfg["dot_size"],
-    pressure_cfg["dot_stride"],
+    prs_disp["meas_color"], prs_disp["model_color"],
+    prs_disp["dot_size"], prs_disp["dot_stride"],
+    show_legend=False
+)
+
+add_history_trace(
+    history_fig, 4, 1,
+    dates, cum_oil_measured, cum_oil_model,
+    "CUMULATIVE OIL, MMm³",
+    cum_disp["meas_color"], cum_disp["model_color"],
+    cum_disp["dot_size"], cum_disp["dot_stride"],
     show_legend=False
 )
 
 history_fig.update_layout(
-    title_text="Artificial Zira History Match – Oil First Layout",
+    title_text="Artificial Zira History Match – Material-Balanced Synthetic Dataset",
     title_x=0.5,
-    height=1100,
+    height=1350,
     template="plotly_white",
     legend=dict(
         orientation="h",
         yanchor="bottom",
-        y=-0.08,
+        y=-0.055,
         xanchor="center",
-        x=0.5
-    )
+        x=0.5,
+    ),
 )
 
 history_fig.update_xaxes(showgrid=True, gridcolor="#D5E5F7")
@@ -622,43 +663,71 @@ history_fig.update_yaxes(showgrid=True, gridcolor="#D5E5F7")
 st.plotly_chart(history_fig, use_container_width=True)
 
 # =========================================================
-# Relative Permeability – Corey Function
+# Material balance consistency checks
+# =========================================================
+st.subheader("Material Balance / Consistency Checks")
+
+check_col1, check_col2, check_col3, check_col4 = st.columns(4)
+
+oil_from_balance = total_liq_measured * (1 - wcut_measured / 100)
+water_from_balance = total_liq_measured * wcut_measured / 100
+gas_from_balance = oil_measured * gor_measured / 1000
+
+check_col1.metric(
+    "Max oil balance error",
+    f"{np.max(np.abs(oil_measured - oil_from_balance)):.4f} m³/d"
+)
+check_col2.metric(
+    "Max water balance error",
+    f"{np.max(np.abs(water_measured - water_from_balance)):.4f} m³/d"
+)
+check_col3.metric(
+    "Max gas/GOR error",
+    f"{np.max(np.abs(gas_measured - gas_from_balance)):.4f} 10³ m³/d"
+)
+check_col4.metric(
+    "Final Cum Oil",
+    f"{cum_oil_measured[-1]:.3f} MMm³"
+)
+
+# =========================================================
+# Relative permeability
 # =========================================================
 st.header("Relative Permeability – Corey Function Playground")
 
 with st.sidebar.expander("Water-Oil Corey Controls", expanded=False):
     st.markdown("**Before History Match**")
-    swc_b = st.slider("WO Before Swc", 0.05, 0.45, 0.25, 0.01)
-    sorw_b = st.slider("WO Before Sorw", 0.05, 0.45, 0.22, 0.01)
-    krw_end_b = st.slider("WO Before Krw end", 0.10, 1.00, 0.95, 0.01)
-    krow_end_b = st.slider("WO Before Kro end", 0.10, 1.00, 1.00, 0.01)
-    nw_b = st.slider("WO Before nw", 1.0, 6.0, 2.60, 0.05)
-    no_b = st.slider("WO Before no", 1.0, 6.0, 2.10, 0.05)
+    swc_b = slider("WO Before Swc", "swc_b", 0.05, 0.45, 0.01)
+    sorw_b = slider("WO Before Sorw", "sorw_b", 0.05, 0.45, 0.01)
+    krw_end_b = slider("WO Before Krw end", "krw_end_b", 0.10, 1.00, 0.01)
+    krow_end_b = slider("WO Before Kro end", "krow_end_b", 0.10, 1.00, 0.01)
+    nw_b = slider("WO Before nw", "nw_b", 1.0, 6.0, 0.05)
+    no_b = slider("WO Before no", "no_b", 1.0, 6.0, 0.05)
 
     st.markdown("**After History Match**")
-    swc_a = st.slider("WO After Swc", 0.05, 0.45, 0.30, 0.01)
-    sorw_a = st.slider("WO After Sorw", 0.05, 0.45, 0.22, 0.01)
-    krw_end_a = st.slider("WO After Krw end", 0.10, 1.00, 0.60, 0.01)
-    krow_end_a = st.slider("WO After Kro end", 0.10, 1.00, 0.96, 0.01)
-    nw_a = st.slider("WO After nw", 1.0, 6.0, 3.80, 0.05)
-    no_a = st.slider("WO After no", 1.0, 6.0, 3.20, 0.05)
+    swc_a = slider("WO After Swc", "swc_a", 0.05, 0.45, 0.01)
+    sorw_a = slider("WO After Sorw", "sorw_a", 0.05, 0.45, 0.01)
+    krw_end_a = slider("WO After Krw end", "krw_end_a", 0.10, 1.00, 0.01)
+    krow_end_a = slider("WO After Kro end", "krow_end_a", 0.10, 1.00, 0.01)
+    nw_a = slider("WO After nw", "nw_a", 1.0, 6.0, 0.05)
+    no_a = slider("WO After no", "no_a", 1.0, 6.0, 0.05)
 
 with st.sidebar.expander("Gas-Oil Corey Controls", expanded=False):
     st.markdown("**Before History Match**")
-    sgc_b = st.slider("GO Before Sgc", 0.00, 0.30, 0.05, 0.01)
-    sorg_b = st.slider("GO Before Sorg", 0.05, 0.45, 0.25, 0.01)
-    krg_end_b = st.slider("GO Before Krg end", 0.10, 1.00, 1.00, 0.01)
-    krog_end_b = st.slider("GO Before Krog end", 0.10, 1.00, 1.00, 0.01)
-    ng_b = st.slider("GO Before ng", 1.0, 6.0, 3.00, 0.05)
-    nog_b = st.slider("GO Before nog", 1.0, 6.0, 2.00, 0.05)
+    sgc_b = slider("GO Before Sgc", "sgc_b", 0.00, 0.30, 0.01)
+    sorg_b = slider("GO Before Sorg", "sorg_b", 0.05, 0.45, 0.01)
+    krg_end_b = slider("GO Before Krg end", "krg_end_b", 0.10, 1.00, 0.01)
+    krog_end_b = slider("GO Before Krog end", "krog_end_b", 0.10, 1.00, 0.01)
+    ng_b = slider("GO Before ng", "ng_b", 1.0, 6.0, 0.05)
+    nog_b = slider("GO Before nog", "nog_b", 1.0, 6.0, 0.05)
 
     st.markdown("**After History Match**")
-    sgc_a = st.slider("GO After Sgc", 0.00, 0.30, 0.08, 0.01)
-    sorg_a = st.slider("GO After Sorg", 0.05, 0.45, 0.28, 0.01)
-    krg_end_a = st.slider("GO After Krg end", 0.10, 1.00, 0.72, 0.01)
-    krog_end_a = st.slider("GO After Krog end", 0.10, 1.00, 0.96, 0.01)
-    ng_a = st.slider("GO After ng", 1.0, 6.0, 4.00, 0.05)
-    nog_a = st.slider("GO After nog", 1.0, 6.0, 2.80, 0.05)
+    sgc_a = slider("GO After Sgc", "sgc_a", 0.00, 0.30, 0.01)
+    sorg_a = slider("GO After Sorg", "sorg_a", 0.05, 0.45, 0.01)
+    krg_end_a = slider("GO After Krg end", "krg_end_a", 0.10, 1.00, 0.01)
+    krog_end_a = slider("GO After Krog end", "krog_end_a", 0.10, 1.00, 0.01)
+    ng_a = slider("GO After ng", "ng_a", 1.0, 6.0, 0.05)
+    nog_a = slider("GO After nog", "nog_a", 1.0, 6.0, 0.05)
 
 sw = np.linspace(0, 1, 101)
 sg = np.linspace(0, 1, 101)
@@ -681,12 +750,13 @@ with tab1:
     fig_wo.add_trace(go.Scatter(x=sw, y=krw_b, mode="lines", name="KRW before HM"))
     fig_wo.add_trace(go.Scatter(x=sw, y=krow_a, mode="lines", name="KROW after HM", line=dict(dash="dash")))
     fig_wo.add_trace(go.Scatter(x=sw, y=krw_a, mode="lines", name="KRW after HM", line=dict(dash="dash")))
+
     fig_wo.update_layout(
         title="Water-Oil Relative Permeabilities – Corey Function",
         xaxis_title="Sw",
         yaxis_title="Relative Permeability",
         template="plotly_white",
-        height=520
+        height=520,
     )
     fig_wo.update_xaxes(range=[0, 1], showgrid=True, gridcolor="#D5E5F7")
     fig_wo.update_yaxes(range=[0, 1.05], showgrid=True, gridcolor="#D5E5F7")
@@ -698,12 +768,13 @@ with tab2:
     fig_go.add_trace(go.Scatter(x=sg, y=krg_b, mode="lines", name="KRG before HM"))
     fig_go.add_trace(go.Scatter(x=sg, y=krog_a, mode="lines", name="KROG after HM", line=dict(dash="dash")))
     fig_go.add_trace(go.Scatter(x=sg, y=krg_a, mode="lines", name="KRG after HM", line=dict(dash="dash")))
+
     fig_go.update_layout(
         title="Gas-Oil Relative Permeabilities – Corey Function",
         xaxis_title="Sg",
         yaxis_title="Relative Permeability",
         template="plotly_white",
-        height=520
+        height=520,
     )
     fig_go.update_xaxes(range=[0, 1], showgrid=True, gridcolor="#D5E5F7")
     fig_go.update_yaxes(range=[0, 1.05], showgrid=True, gridcolor="#D5E5F7")
@@ -713,20 +784,20 @@ with tab3:
     overlay_type = st.radio(
         "Overlay type",
         ["Water-Oil only", "Gas-Oil only", "Both"],
-        horizontal=True
+        horizontal=True,
     )
 
     if overlay_type == "Both":
         fig_overlay = make_subplots(
             rows=1,
             cols=2,
-            subplot_titles=("Water-Oil Before vs After", "Gas-Oil Before vs After")
+            subplot_titles=("Water-Oil Before vs After", "Gas-Oil Before vs After"),
         )
     else:
         fig_overlay = make_subplots(
             rows=1,
             cols=1,
-            subplot_titles=(f"{overlay_type} Before vs After",)
+            subplot_titles=(f"{overlay_type} Before vs After",),
         )
 
     if overlay_type in ["Water-Oil only", "Both"]:
@@ -751,27 +822,31 @@ with tab3:
         template="plotly_white",
         height=520,
         title_text="Relative Permeability Overlay",
-        title_x=0.5
+        title_x=0.5,
     )
     fig_overlay.update_xaxes(showgrid=True, gridcolor="#D5E5F7")
     fig_overlay.update_yaxes(showgrid=True, gridcolor="#D5E5F7")
     st.plotly_chart(fig_overlay, use_container_width=True)
 
 # =========================================================
-# Data tables
+# DataFrames
 # =========================================================
 history_df = pd.DataFrame({
     "Date": dates,
+    "Total_Liquid_Measured_m3d": total_liq_measured,
+    "Total_Liquid_Model_m3d": total_liq_model,
     "Oil_Rate_Measured_m3d": oil_measured,
     "Oil_Rate_Model_m3d": oil_model,
-    "Gas_Rate_Measured_Mm3d": gas_measured,
-    "Gas_Rate_Model_Mm3d": gas_model,
     "Water_Rate_Measured_m3d": water_measured,
     "Water_Rate_Model_m3d": water_model,
     "Water_Cut_Measured_pct": wcut_measured,
     "Water_Cut_Model_pct": wcut_model,
     "GOR_Measured_m3m3": gor_measured,
     "GOR_Model_m3m3": gor_model,
+    "Gas_Rate_Measured_10e3m3d": gas_measured,
+    "Gas_Rate_Model_10e3m3d": gas_model,
+    "Cumulative_Oil_Measured_MMm3": cum_oil_measured,
+    "Cumulative_Oil_Model_MMm3": cum_oil_model,
     "Reservoir_Pressure_Measured_bar": pressure_measured,
     "Reservoir_Pressure_Model_bar": pressure_model,
 })
@@ -792,39 +867,10 @@ relperm_go_df = pd.DataFrame({
     "KROG_after_HM": krog_a,
 })
 
+current_values = {k: st.session_state[k] for k in DEFAULTS.keys()}
 controls_df = pd.DataFrame({
-    "Parameter": [
-        "Seed",
-
-        "Oil quality", "Oil bias", "Oil smoothness", "Oil noise", "Oil mismatch count", "Oil mismatch strength", "Oil dot stride",
-        "Gas quality", "Gas bias", "Gas smoothness", "Gas noise", "Gas mismatch count", "Gas mismatch strength", "Gas dot stride",
-        "Water quality", "Water bias", "Water smoothness", "Water noise", "Water mismatch count", "Water mismatch strength", "Water dot stride",
-        "Water cut quality", "Water cut bias", "Water cut smoothness", "Water cut noise", "Water cut mismatch count", "Water cut mismatch strength", "Water cut dot stride",
-        "GOR quality", "GOR bias", "GOR smoothness", "GOR noise", "GOR mismatch count", "GOR mismatch strength", "GOR dot stride",
-        "Pressure quality", "Pressure bias", "Pressure smoothness", "Pressure noise", "Pressure mismatch count", "Pressure mismatch strength", "Pressure dot stride",
-
-        "WO before Swc", "WO before Sorw", "WO before Krw end", "WO before Kro end", "WO before nw", "WO before no",
-        "WO after Swc", "WO after Sorw", "WO after Krw end", "WO after Kro end", "WO after nw", "WO after no",
-
-        "GO before Sgc", "GO before Sorg", "GO before Krg end", "GO before Krog end", "GO before ng", "GO before nog",
-        "GO after Sgc", "GO after Sorg", "GO after Krg end", "GO after Krog end", "GO after ng", "GO after nog",
-    ],
-    "Value": [
-        seed,
-
-        oil_cfg["quality"], oil_cfg["bias"], oil_cfg["smoothness"], oil_cfg["noise"], oil_cfg["mismatch_count"], oil_cfg["mismatch_strength"], oil_cfg["dot_stride"],
-        gas_cfg["quality"], gas_cfg["bias"], gas_cfg["smoothness"], gas_cfg["noise"], gas_cfg["mismatch_count"], gas_cfg["mismatch_strength"], gas_cfg["dot_stride"],
-        water_cfg["quality"], water_cfg["bias"], water_cfg["smoothness"], water_cfg["noise"], water_cfg["mismatch_count"], water_cfg["mismatch_strength"], water_cfg["dot_stride"],
-        wcut_cfg["quality"], wcut_cfg["bias"], wcut_cfg["smoothness"], wcut_cfg["noise"], wcut_cfg["mismatch_count"], wcut_cfg["mismatch_strength"], wcut_cfg["dot_stride"],
-        gor_cfg["quality"], gor_cfg["bias"], gor_cfg["smoothness"], gor_cfg["noise"], gor_cfg["mismatch_count"], gor_cfg["mismatch_strength"], gor_cfg["dot_stride"],
-        pressure_cfg["quality"], pressure_cfg["bias"], pressure_cfg["smoothness"], pressure_cfg["noise"], pressure_cfg["mismatch_count"], pressure_cfg["mismatch_strength"], pressure_cfg["dot_stride"],
-
-        swc_b, sorw_b, krw_end_b, krow_end_b, nw_b, no_b,
-        swc_a, sorw_a, krw_end_a, krow_end_a, nw_a, no_a,
-
-        sgc_b, sorg_b, krg_end_b, krog_end_b, ng_b, nog_b,
-        sgc_a, sorg_a, krg_end_a, krog_end_a, ng_a, nog_a,
-    ]
+    "Parameter": list(current_values.keys()),
+    "Value": list(current_values.values()),
 })
 
 with st.expander("Show generated data tables"):
@@ -837,14 +883,32 @@ with st.expander("Show generated data tables"):
     st.subheader("Gas-Oil RelPerm")
     st.dataframe(relperm_go_df, use_container_width=True)
 
+    st.subheader("Controls")
+    st.dataframe(controls_df, use_container_width=True)
+
 # =========================================================
-# Excel download
+# Downloads: Excel and JSON
 # =========================================================
 excel_file = make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df)
 
 st.download_button(
-    label="Download Excel – Artificial Zira History Match & RelPerm",
+    label="Download Excel – Artificial Zira Material-Balanced Dataset",
     data=excel_file,
-    file_name="Zira_Artificial_HistoryMatch_RelPerm_Playground.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    file_name="Zira_MaterialBalanced_HistoryMatch_RelPerm.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+json_payload = {
+    "app": "Zira Material-Balanced Artificial History Match & RelPerm Generator",
+    "version": "2.0",
+    "values": current_values,
+}
+
+json_bytes = json.dumps(json_payload, indent=2).encode("utf-8")
+
+st.download_button(
+    label="Save Current Settings as JSON",
+    data=json_bytes,
+    file_name="Zira_HistoryMatch_Settings.json",
+    mime="application/json",
 )
