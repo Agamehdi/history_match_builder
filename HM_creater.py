@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 st.set_page_config(
-    page_title="Zira Artificial History Match & RelPerm Generator",
+    page_title="Generic Field History Match & RelPerm Generator",
     layout="wide"
 )
 
@@ -15,59 +15,85 @@ st.set_page_config(
 # DEFAULTS
 # =========================================================
 DEFAULTS = {
-    # Global
-    "seed": 2024,
+    # General field setup
+    "field_name": "Synthetic Oil Field",
+    "seed": 2026,
+    "start_year": 2000,
+    "history_years": 24,
+    "time_frequency": "Monthly",
 
-    # Plot view controls
-    "unit_system": "Metric",      # Metric or Field
-    "x_axis_mode": "Date",        # Date or Years
-    "plot_start_year": 1956,
-    "plot_years": 69,
+    # Plot view
+    "unit_system": "Metric",      # Metric / Field
+    "x_axis_mode": "Date",        # Date / Years
+    "plot_start_year": 2000,
+    "plot_years": 24,
 
-    # Model distortion controls
-    # Liquid controls oil/water consistency
+    # Measured field behavior controls
+    "initial_liquid_rate": 900.0,
+    "peak_liquid_rate": 1450.0,
+    "plateau_years": 4.0,
+    "annual_decline_pct": 8.0,
+    "late_redevelopment": True,
+    "redevelopment_year": 13.0,
+    "redevelopment_strength": 0.35,
+    "liquid_noise_pct": 5.0,
+
+    "initial_water_cut_pct": 18.0,
+    "maximum_water_cut_pct": 82.0,
+    "water_cut_rise_year": 8.0,
+    "water_cut_rise_speed": 2.4,
+    "water_cut_noise_pct": 2.0,
+
+    "initial_gor": 90.0,
+    "maximum_gor": 240.0,
+    "gor_pressure_sensitivity": 1.1,
+    "gor_noise_pct": 5.0,
+
+    "initial_pressure_bar": 255.0,
+    "abandonment_pressure_bar": 135.0,
+    "aquifer_support": 0.35,
+    "pressure_noise_bar": 3.0,
+
+    # Model matching controls
     "liq_quality": 0.82,
     "liq_global_bias": 0,
-    "liq_early_bias": 4,
+    "liq_early_bias": 3,
     "liq_late_bias": -3,
     "liq_lag": 0,
-    "liq_smoothness": 13,
+    "liq_smoothness": 9,
     "liq_noise": 0.012,
-    "liq_offzones": 4,
-    "liq_offstrength": 0.06,
+    "liq_offzones": 3,
+    "liq_offstrength": 0.05,
 
-    # WCUT controls
-    "wcut_quality": 0.86,
+    "wcut_quality": 0.84,
     "wcut_global_bias": 0,
-    "wcut_early_bias": -3,
+    "wcut_early_bias": -2,
     "wcut_late_bias": 2,
     "wcut_lag": 0,
-    "wcut_smoothness": 11,
-    "wcut_noise": 0.008,
+    "wcut_smoothness": 9,
+    "wcut_noise": 0.006,
     "wcut_offzones": 3,
-    "wcut_offstrength": 0.035,
+    "wcut_offstrength": 0.025,
 
-    # GOR controls
     "gor_quality": 0.78,
     "gor_global_bias": 0,
-    "gor_early_bias": 5,
-    "gor_late_bias": -4,
+    "gor_early_bias": 4,
+    "gor_late_bias": -3,
     "gor_lag": 0,
-    "gor_smoothness": 13,
-    "gor_noise": 0.015,
+    "gor_smoothness": 11,
+    "gor_noise": 0.012,
     "gor_offzones": 4,
-    "gor_offstrength": 0.06,
+    "gor_offstrength": 0.05,
 
-    # Pressure controls
-    "prs_quality": 0.84,
+    "prs_quality": 0.86,
     "prs_global_bias": 0,
     "prs_early_bias": 2,
     "prs_late_bias": -2,
     "prs_lag": 0,
-    "prs_smoothness": 17,
-    "prs_noise": 0.006,
+    "prs_smoothness": 13,
+    "prs_noise": 0.005,
     "prs_offzones": 3,
-    "prs_offstrength": 0.025,
+    "prs_offstrength": 0.02,
 
     # Display controls
     "oil_dot_size": 7,
@@ -96,7 +122,7 @@ DEFAULTS = {
     "gor_model_color": "#e96be0",
 
     "prs_dot_size": 7,
-    "prs_dot_stride": 3,
+    "prs_dot_stride": 2,
     "prs_meas_color": "#d97a6c",
     "prs_model_color": "#6f35a5",
 
@@ -105,35 +131,34 @@ DEFAULTS = {
     "cum_meas_color": "#d97a6c",
     "cum_model_color": "#2fa84f",
 
-    # Water-Oil Corey defaults
-    "swc_b": 0.25,
-    "sorw_b": 0.22,
-    "krw_end_b": 0.95,
+    # RelPerm default values
+    "swc_b": 0.22,
+    "sorw_b": 0.25,
+    "krw_end_b": 0.85,
     "krow_end_b": 1.00,
-    "nw_b": 2.60,
-    "no_b": 2.10,
+    "nw_b": 2.40,
+    "no_b": 2.20,
 
-    "swc_a": 0.30,
+    "swc_a": 0.27,
     "sorw_a": 0.22,
-    "krw_end_a": 0.60,
+    "krw_end_a": 0.62,
     "krow_end_a": 0.96,
-    "nw_a": 3.80,
-    "no_a": 3.20,
+    "nw_a": 3.20,
+    "no_a": 3.00,
 
-    # Gas-Oil Corey defaults
-    "sgc_b": 0.05,
+    "sgc_b": 0.04,
     "sorg_b": 0.25,
     "krg_end_b": 1.00,
     "krog_end_b": 1.00,
-    "ng_b": 3.00,
+    "ng_b": 2.80,
     "nog_b": 2.00,
 
-    "sgc_a": 0.08,
+    "sgc_a": 0.07,
     "sorg_a": 0.28,
     "krg_end_a": 0.72,
-    "krog_end_a": 0.96,
-    "ng_a": 4.00,
-    "nog_a": 2.80,
+    "krog_end_a": 0.95,
+    "ng_a": 3.80,
+    "nog_a": 2.70,
 }
 
 for k, v in DEFAULTS.items():
@@ -142,7 +167,7 @@ for k, v in DEFAULTS.items():
 
 
 # =========================================================
-# Helper functions
+# Helpers
 # =========================================================
 def rolling_np(values, window):
     window = max(1, int(window))
@@ -160,19 +185,23 @@ def shift_curve(values, lag):
     return np.interp(idx - lag, idx, values, left=values[0], right=values[-1])
 
 
+def calc_cumulative(rate_m3d, dates):
+    days = pd.Series(dates).diff().dt.days.fillna(0).to_numpy()
+    return np.cumsum(rate_m3d * days) / 1e6
+
+
 def add_smooth_offzones(model, measured, count, strength, seed):
     rng = np.random.default_rng(seed)
     n = len(model)
     idx = np.arange(n)
     scale = max(np.nanmax(measured) - np.nanmin(measured), 1.0)
-
     out = model.copy()
 
     for _ in range(int(count)):
-        center = rng.integers(8, max(10, n - 8))
-        width = rng.integers(6, 22)
+        center = rng.integers(5, max(6, n - 5))
+        width = rng.integers(4, max(5, min(20, n // 4)))
         sign = rng.choice([-1, 1])
-        amp = scale * strength * rng.uniform(0.55, 1.20)
+        amp = scale * strength * rng.uniform(0.5, 1.2)
         bump = np.exp(-0.5 * ((idx - center) / width) ** 2)
         out += sign * amp * bump
 
@@ -206,7 +235,6 @@ def build_model_curve(
     ema = ema_np(shifted, smoothness)
 
     backbone = 0.35 * short + 0.45 * long + 0.20 * ema
-
     bias_profile = global_bias + early_bias * (1 - progress) + late_bias * progress
     biased = backbone * (1 + bias_profile / 100.0)
 
@@ -219,26 +247,17 @@ def build_model_curve(
         measured,
         count=offzones,
         strength=offstrength,
-        seed=seed + 101
+        seed=seed + 101,
     )
 
     smooth_measured = rolling_np(measured, max(3, smoothness // 2))
     model = quality * smooth_measured + (1 - quality) * distorted
-
     model = rolling_np(model, max(3, smoothness // 3))
 
     if max_value is not None:
-        model = np.clip(model, min_value, max_value)
-    else:
-        model = np.clip(model, min_value, None)
+        return np.clip(model, min_value, max_value)
 
-    return model
-
-
-def calc_cumulative(rate_m3d, dates):
-    days = pd.Series(dates).diff().dt.days.fillna(0).to_numpy()
-    cum_m3 = np.cumsum(rate_m3d * days)
-    return cum_m3 / 1e6  # MMm3
+    return np.clip(model, min_value, None)
 
 
 def convert_display_units(
@@ -251,11 +270,6 @@ def convert_display_units(
     pressure_measured, pressure_model,
     cum_oil_measured, cum_oil_model,
 ):
-    """
-    Internal dataset remains metric.
-    This function only converts values for plotting.
-    """
-
     if unit_system == "Metric":
         return {
             "oil_measured": oil_measured,
@@ -272,7 +286,6 @@ def convert_display_units(
             "pressure_model": pressure_model,
             "cum_oil_measured": cum_oil_measured,
             "cum_oil_model": cum_oil_model,
-
             "oil_label": "OIL_RATE, m³/d",
             "gas_label": "GAS_RATE, 10³ m³/d",
             "water_label": "WATER_RATE, m³/d",
@@ -282,34 +295,26 @@ def convert_display_units(
             "cum_oil_label": "CUMULATIVE OIL, MMm³",
         }
 
-    # Field units
     M3_TO_STB = 6.28981
     M3M3_TO_SCFSTB = 5.615
     BAR_TO_PSI = 14.5038
-    KSM3D_TO_MMSCFD = 0.0353147  # 10³ m³/d to MMscf/d
+    KSM3D_TO_MMSCFD = 0.0353147
 
     return {
         "oil_measured": oil_measured * M3_TO_STB,
         "oil_model": oil_model * M3_TO_STB,
-
         "gas_measured": gas_measured * KSM3D_TO_MMSCFD,
         "gas_model": gas_model * KSM3D_TO_MMSCFD,
-
         "water_measured": water_measured * M3_TO_STB,
         "water_model": water_model * M3_TO_STB,
-
         "wcut_measured": wcut_measured,
         "wcut_model": wcut_model,
-
         "gor_measured": gor_measured * M3M3_TO_SCFSTB,
         "gor_model": gor_model * M3M3_TO_SCFSTB,
-
         "pressure_measured": pressure_measured * BAR_TO_PSI,
         "pressure_model": pressure_model * BAR_TO_PSI,
-
         "cum_oil_measured": cum_oil_measured * M3_TO_STB,
         "cum_oil_model": cum_oil_model * M3_TO_STB,
-
         "oil_label": "OIL_RATE, STB/d",
         "gas_label": "GAS_RATE, MMscf/d",
         "water_label": "WATER_RATE, STB/d",
@@ -321,24 +326,20 @@ def convert_display_units(
 
 
 def make_plot_window(dates, x_axis_mode, plot_start_year, plot_years):
-    start_date = pd.Timestamp(f"{plot_start_year}-01-01")
+    start_date = pd.Timestamp(f"{int(plot_start_year)}-01-01")
     end_date = start_date + pd.DateOffset(years=int(plot_years))
-
     mask = (dates >= start_date) & (dates < end_date)
 
     if mask.sum() == 0:
         mask = np.ones(len(dates), dtype=bool)
 
-    dates_filtered = dates[mask]
+    filtered_dates = dates[mask]
 
     if x_axis_mode == "Years":
-        x_values = (dates_filtered - dates_filtered[0]).days / 365.25
-        x_title = "YEARS"
-    else:
-        x_values = dates_filtered
-        x_title = "DATE"
+        x_values = (filtered_dates - filtered_dates[0]).days / 365.25
+        return mask, x_values, "YEARS"
 
-    return mask, x_values, x_title
+    return mask, filtered_dates, "DATE"
 
 
 def add_history_trace(
@@ -356,20 +357,17 @@ def add_history_trace(
     x_title="DATE",
     show_legend=False,
 ):
-    x_meas = x[::dot_stride]
-    y_meas = measured[::dot_stride]
-
     fig.add_trace(
         go.Scatter(
-            x=x_meas,
-            y=y_meas,
+            x=x[::dot_stride],
+            y=measured[::dot_stride],
             mode="markers",
             name="Measured Data",
             marker=dict(
                 color=measured_color,
                 size=dot_size,
                 opacity=0.80,
-                line=dict(color="rgba(70,70,70,0.55)", width=0.8),
+                line=dict(color="rgba(60,60,60,0.55)", width=0.8),
             ),
             showlegend=show_legend,
         ),
@@ -412,15 +410,15 @@ def corey_gas_oil(sg, sgc, sorg, krg_end, krog_end, ng, nog):
 
 def model_control_group(title, prefix):
     with st.sidebar.expander(title, expanded=False):
-        quality = st.slider("Match quality", 0.0, 1.0, key=f"{prefix}_quality", step=0.01)
-        global_bias = st.slider("Global bias, %", -30, 30, key=f"{prefix}_global_bias", step=1)
-        early_bias = st.slider("Early-period bias, %", -30, 30, key=f"{prefix}_early_bias", step=1)
-        late_bias = st.slider("Late-period bias, %", -30, 30, key=f"{prefix}_late_bias", step=1)
-        lag = st.slider("Lag / lead, quarters", -8, 8, key=f"{prefix}_lag", step=1)
-        smoothness = st.slider("Model smoothness", 3, 35, key=f"{prefix}_smoothness", step=2)
-        noise = st.slider("Low-frequency noise", 0.0, 0.08, key=f"{prefix}_noise", step=0.002)
-        offzones = st.slider("Off-zone count", 0, 8, key=f"{prefix}_offzones", step=1)
-        offstrength = st.slider("Off-zone strength", 0.0, 0.25, key=f"{prefix}_offstrength", step=0.005)
+        quality = st.slider("Match quality", 0.0, 1.0, step=0.01, key=f"{prefix}_quality")
+        global_bias = st.slider("Global bias, %", -30, 30, step=1, key=f"{prefix}_global_bias")
+        early_bias = st.slider("Early-period bias, %", -30, 30, step=1, key=f"{prefix}_early_bias")
+        late_bias = st.slider("Late-period bias, %", -30, 30, step=1, key=f"{prefix}_late_bias")
+        lag = st.slider("Lag / lead, timesteps", -12, 12, step=1, key=f"{prefix}_lag")
+        smoothness = st.slider("Model smoothness", 3, 35, step=2, key=f"{prefix}_smoothness")
+        noise = st.slider("Low-frequency noise", 0.0, 0.08, step=0.002, key=f"{prefix}_noise")
+        offzones = st.slider("Off-zone count", 0, 8, step=1, key=f"{prefix}_offzones")
+        offstrength = st.slider("Off-zone strength", 0.0, 0.25, step=0.005, key=f"{prefix}_offstrength")
 
     return {
         "quality": quality,
@@ -437,8 +435,8 @@ def model_control_group(title, prefix):
 
 def display_control_group(title, prefix):
     with st.sidebar.expander(title, expanded=False):
-        dot_size = st.slider("Measured dot size", 2, 18, key=f"{prefix}_dot_size", step=1)
-        dot_stride = st.slider("Measured dot density: show every Nth point", 1, 12, key=f"{prefix}_dot_stride", step=1)
+        dot_size = st.slider("Measured dot size", 2, 18, step=1, key=f"{prefix}_dot_size")
+        dot_stride = st.slider("Measured dot density: show every Nth point", 1, 12, step=1, key=f"{prefix}_dot_stride")
         meas_color = st.color_picker("Measured dot color", key=f"{prefix}_meas_color")
         model_color = st.color_picker("Model line color", key=f"{prefix}_model_color")
 
@@ -466,12 +464,14 @@ def make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df):
             "border": 1,
         })
 
-        for sheet_name, df in {
+        sheets = {
             "History_Match_Metric": history_df,
             "RelPerm_WaterOil": relperm_wo_df,
             "RelPerm_GasOil": relperm_go_df,
             "Controls": controls_df,
-        }.items():
+        }
+
+        for sheet_name, df in sheets.items():
             ws = writer.sheets[sheet_name]
             ws.freeze_panes(1, 0)
             ws.set_column(0, len(df.columns) - 1, 22)
@@ -484,16 +484,16 @@ def make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df):
 
 
 # =========================================================
-# Title
+# App title
 # =========================================================
-st.title("Zira Field – Material-Balanced Artificial History Match & RelPerm Generator")
+st.title("Generic Field – Material-Balanced Artificial History Match & RelPerm Generator")
 st.caption(
-    "Synthetic curves for draft paper formatting only. "
-    "Oil, gas, GOR, water rate, water cut, cumulative oil and pressure are kept physically consistent."
+    "Synthetic field history generator with material-balance consistency. "
+    "Water cut is capped below 100% by user control."
 )
 
 # =========================================================
-# Sidebar JSON load/save
+# JSON load / reset
 # =========================================================
 st.sidebar.header("Load / Save Settings")
 
@@ -518,8 +518,19 @@ if st.sidebar.button("Reset to default settings"):
 # =========================================================
 # Sidebar controls
 # =========================================================
-st.sidebar.header("Global Controls")
-seed = st.sidebar.number_input("Random seed", min_value=1, max_value=99999, step=1, key="seed")
+st.sidebar.header("Field Setup")
+
+field_name = st.sidebar.text_input("Field name", key="field_name")
+seed = st.sidebar.number_input("Random seed", min_value=1, max_value=999999, step=1, key="seed")
+
+start_year = st.sidebar.slider("History start year", 1950, 2030, step=1, key="start_year")
+history_years = st.sidebar.slider("Total history length, years", 3, 80, step=1, key="history_years")
+
+time_frequency = st.sidebar.radio(
+    "History data frequency",
+    ["Monthly", "Quarterly"],
+    key="time_frequency"
+)
 
 st.sidebar.header("Plot View Controls")
 
@@ -537,13 +548,13 @@ x_axis_mode = st.sidebar.radio(
 
 plot_start_year = st.sidebar.slider(
     "Plot start year",
-    1956,
-    2024,
+    int(start_year),
+    int(start_year + history_years - 1),
     key="plot_start_year",
     step=1,
 )
 
-max_plot_years = max(1, 2025 - int(plot_start_year))
+max_plot_years = max(1, int(start_year + history_years - plot_start_year))
 if st.session_state["plot_years"] > max_plot_years:
     st.session_state["plot_years"] = max_plot_years
 
@@ -555,13 +566,38 @@ plot_years = st.sidebar.slider(
     step=1,
 )
 
-st.sidebar.header("Model Consistency Controls")
-st.sidebar.caption(
-    "Total Liquid controls Oil/Water balance. "
-    "Gas is derived from Oil × GOR. "
-    "Pressure is linked to cumulative offtake."
-)
+st.sidebar.header("Measured Field History Controls")
 
+with st.sidebar.expander("Production Profile", expanded=True):
+    initial_liquid_rate = st.slider("Initial liquid rate, m³/d", 50.0, 3000.0, step=10.0, key="initial_liquid_rate")
+    peak_liquid_rate = st.slider("Peak liquid rate, m³/d", 100.0, 6000.0, step=10.0, key="peak_liquid_rate")
+    plateau_years = st.slider("Plateau years", 0.0, 20.0, step=0.5, key="plateau_years")
+    annual_decline_pct = st.slider("Annual decline, %", 1.0, 25.0, step=0.5, key="annual_decline_pct")
+    late_redevelopment = st.checkbox("Add late redevelopment / infill hump", key="late_redevelopment")
+    redevelopment_year = st.slider("Redevelopment timing, years from start", 1.0, float(history_years), step=0.5, key="redevelopment_year")
+    redevelopment_strength = st.slider("Redevelopment strength", 0.0, 1.5, step=0.05, key="redevelopment_strength")
+    liquid_noise_pct = st.slider("Measured liquid noise, %", 0.0, 20.0, step=0.5, key="liquid_noise_pct")
+
+with st.sidebar.expander("Water Cut Profile", expanded=True):
+    initial_water_cut_pct = st.slider("Initial water cut, %", 0.0, 60.0, step=1.0, key="initial_water_cut_pct")
+    maximum_water_cut_pct = st.slider("Maximum water cut, %", 30.0, 95.0, step=1.0, key="maximum_water_cut_pct")
+    water_cut_rise_year = st.slider("Water cut rise timing, years from start", 0.5, float(history_years), step=0.5, key="water_cut_rise_year")
+    water_cut_rise_speed = st.slider("Water cut rise speed", 0.5, 8.0, step=0.1, key="water_cut_rise_speed")
+    water_cut_noise_pct = st.slider("Measured WCUT noise, %", 0.0, 10.0, step=0.2, key="water_cut_noise_pct")
+
+with st.sidebar.expander("GOR / Gas Profile", expanded=False):
+    initial_gor = st.slider("Initial GOR, m³/m³", 10.0, 800.0, step=5.0, key="initial_gor")
+    maximum_gor = st.slider("Maximum GOR, m³/m³", 50.0, 2000.0, step=10.0, key="maximum_gor")
+    gor_pressure_sensitivity = st.slider("GOR pressure sensitivity", 0.0, 3.0, step=0.1, key="gor_pressure_sensitivity")
+    gor_noise_pct = st.slider("Measured GOR noise, %", 0.0, 20.0, step=0.5, key="gor_noise_pct")
+
+with st.sidebar.expander("Pressure Profile", expanded=False):
+    initial_pressure_bar = st.slider("Initial pressure, bar", 80.0, 600.0, step=5.0, key="initial_pressure_bar")
+    abandonment_pressure_bar = st.slider("Late pressure, bar", 30.0, 400.0, step=5.0, key="abandonment_pressure_bar")
+    aquifer_support = st.slider("Aquifer / pressure support", 0.0, 0.9, step=0.05, key="aquifer_support")
+    pressure_noise_bar = st.slider("Measured pressure noise, bar", 0.0, 20.0, step=0.5, key="pressure_noise_bar")
+
+st.sidebar.header("Model Match Controls")
 liq_cfg = model_control_group("Total Liquid / Oil-Water System", "liq")
 wcut_cfg = model_control_group("Water Cut System", "wcut")
 gor_cfg = model_control_group("GOR / Gas System", "gor")
@@ -577,55 +613,67 @@ prs_disp = display_control_group("Pressure Display", "prs")
 cum_disp = display_control_group("Cumulative Oil Display", "cum")
 
 # =========================================================
-# Synthetic measured data with material balance consistency
+# Generate measured synthetic field history
 # =========================================================
-dates = pd.date_range("1956-01-01", "2024-12-01", freq="QS")
-year = dates.year + (dates.dayofyear - 1) / 365.25
+freq = "MS" if time_frequency == "Monthly" else "QS"
+periods = int(history_years * (12 if time_frequency == "Monthly" else 4))
+dates = pd.date_range(f"{int(start_year)}-01-01", periods=periods, freq=freq)
+t_years = np.arange(periods) / (12 if time_frequency == "Monthly" else 4)
 rng = np.random.default_rng(seed)
 
-# Total liquid rate: early peak + decline + later secondary water-handling hump
-early_liq_peak = 1650 * np.exp(-((year - 1962.0) / 1.55) ** 2)
-liq_tail = 370 * np.exp(-0.052 * np.maximum(year - 1965, 0))
-late_liq_hump = 420 * np.exp(-((year - 2010) / 7.8) ** 2)
-small_ops = 40 * np.sin((year - 1956) / 1.8) * np.exp(-0.025 * np.maximum(year - 1965, 0))
+# Liquid profile
+ramp = initial_liquid_rate + (peak_liquid_rate - initial_liquid_rate) * (1 - np.exp(-t_years / 0.9))
+decline_start = plateau_years
+decline_factor = np.exp(-annual_decline_pct / 100.0 * np.maximum(t_years - decline_start, 0))
+total_liq_clean = ramp * decline_factor
 
-total_liq_measured = early_liq_peak + liq_tail + late_liq_hump + small_ops
-total_liq_measured += rng.normal(0, 28, len(dates))
-total_liq_measured = np.clip(total_liq_measured, 3, None)
+if late_redevelopment:
+    hump_width = max(1.0, history_years / 9.0)
+    hump = redevelopment_strength * peak_liquid_rate * np.exp(-0.5 * ((t_years - redevelopment_year) / hump_width) ** 2)
+    total_liq_clean += hump
 
-# Water cut: increasing mature-field behavior
-wcut_measured = 18 + 80 / (1 + np.exp(-(year - 1967.5) / 3.4))
-wcut_measured += 8 * np.sin((year - 1957) / 2.5) * np.exp(-0.045 * np.maximum(year - 1967, 0))
-wcut_measured += rng.normal(0, 3.2, len(dates))
-wcut_measured = np.clip(wcut_measured, 5, 99)
+seasonality = 1 + 0.025 * np.sin(2 * np.pi * t_years)
+total_liq_measured = total_liq_clean * seasonality
+total_liq_measured *= 1 + rng.normal(0, liquid_noise_pct / 100.0, periods)
+total_liq_measured = np.clip(total_liq_measured, 1, None)
 
-# Oil and water from material balance
-oil_measured = total_liq_measured * (1 - wcut_measured / 100)
-water_measured = total_liq_measured * (wcut_measured / 100)
+# Water cut profile capped below 100
+wc_mid = water_cut_rise_year
+wc_speed = water_cut_rise_speed
+wcut_clean = initial_water_cut_pct + (maximum_water_cut_pct - initial_water_cut_pct) / (
+    1 + np.exp(-(t_years - wc_mid) / wc_speed)
+)
+wcut_clean += 1.5 * np.sin(2 * np.pi * t_years / 5.5)
+wcut_measured = wcut_clean + rng.normal(0, water_cut_noise_pct, periods)
+wcut_measured = np.clip(wcut_measured, 0, maximum_water_cut_pct)
 
-# GOR: early solution-gas peak, then decline/stabilization
-gor_measured = 650 + 3600 * np.exp(-((year - 1961.3) / 2.15) ** 2)
-gor_measured += 260 * np.exp(-0.045 * np.maximum(year - 1966, 0))
-gor_measured += 90 * np.sin((year - 1956) / 2.2) * np.exp(-0.02 * np.maximum(year - 1970, 0))
-gor_measured += rng.normal(0, 55, len(dates))
-gor_measured = np.clip(gor_measured, 80, None)
+# Oil and water are derived from liquid and WCUT
+oil_measured = total_liq_measured * (1 - wcut_measured / 100.0)
+water_measured = total_liq_measured * (wcut_measured / 100.0)
 
-# Gas rate from Oil × GOR
-# Unit: 10³ m³/d
-gas_measured = oil_measured * gor_measured / 1000
-
-# Cumulative oil from oil rate
+# Cumulative oil
 cum_oil_measured = calc_cumulative(oil_measured, dates)
 
-# Pressure linked to cumulative oil/offtake
-cum_norm = cum_oil_measured / max(cum_oil_measured.max(), 1e-6)
-pressure_base = 145 - 43 * (cum_norm ** 0.72)
-pressure_measured = pressure_base + 2.2 * np.sin((year - 1956) / 4.2)
-pressure_measured += rng.normal(0, 1.8, len(dates))
-pressure_measured = np.clip(pressure_measured, 88, 150)
+# Pressure from cumulative offtake and support
+cum_norm = cum_oil_measured / max(cum_oil_measured.max(), 1e-9)
+pressure_drop = (initial_pressure_bar - abandonment_pressure_bar) * (1 - aquifer_support)
+pressure_clean = initial_pressure_bar - pressure_drop * (cum_norm ** 0.75)
+pressure_clean += 2.0 * np.sin(2 * np.pi * t_years / 8.0)
+pressure_measured = pressure_clean + rng.normal(0, pressure_noise_bar, periods)
+pressure_measured = np.clip(pressure_measured, abandonment_pressure_bar, initial_pressure_bar * 1.05)
+
+# GOR linked to pressure depletion; bounded
+pressure_depletion = np.clip((initial_pressure_bar - pressure_measured) / max(initial_pressure_bar - abandonment_pressure_bar, 1e-9), 0, 1)
+gor_clean = initial_gor + (maximum_gor - initial_gor) * (pressure_depletion ** gor_pressure_sensitivity)
+gor_clean += 0.05 * initial_gor * np.sin(2 * np.pi * t_years / 4.0)
+gor_measured = gor_clean * (1 + rng.normal(0, gor_noise_pct / 100.0, periods))
+gor_measured = np.clip(gor_measured, 1, maximum_gor)
+
+# Gas rate derived from oil × GOR
+gas_measured = oil_measured * gor_measured / 1000.0  # 10³ m³/d
 
 # =========================================================
-# Model curves – primary variables first
+# Model curves and material-balanced derived model
 # =========================================================
 total_liq_model = build_model_curve(
     total_liq_measured,
@@ -638,40 +686,36 @@ total_liq_model = build_model_curve(
 wcut_model = build_model_curve(
     wcut_measured,
     seed=seed + 2,
-    min_value=1,
-    max_value=99,
+    min_value=0,
+    max_value=maximum_water_cut_pct,
     **wcut_cfg
 )
 
 gor_model = build_model_curve(
     gor_measured,
     seed=seed + 3,
-    min_value=20,
-    max_value=None,
+    min_value=1,
+    max_value=maximum_gor,
     **gor_cfg
 )
 
-# Derived model values preserving consistency
-oil_model = total_liq_model * (1 - wcut_model / 100)
-water_model = total_liq_model * (wcut_model / 100)
-gas_model = oil_model * gor_model / 1000
+oil_model = total_liq_model * (1 - wcut_model / 100.0)
+water_model = total_liq_model * (wcut_model / 100.0)
+gas_model = oil_model * gor_model / 1000.0
 cum_oil_model = calc_cumulative(oil_model, dates)
 
-# Pressure model based on model cumulative oil/offtake
-cum_model_norm = cum_oil_model / max(cum_oil_model.max(), 1e-6)
-pressure_consistent_model = 145 - 43 * (cum_model_norm ** 0.72)
-pressure_consistent_model += 1.2 * np.sin((year - 1956) / 5.0)
-
+cum_model_norm = cum_oil_model / max(cum_oil_model.max(), 1e-9)
+pressure_consistent_model = initial_pressure_bar - pressure_drop * (cum_model_norm ** 0.75)
 pressure_model = build_model_curve(
     pressure_consistent_model,
     seed=seed + 4,
-    min_value=80,
-    max_value=155,
+    min_value=abandonment_pressure_bar,
+    max_value=initial_pressure_bar * 1.05,
     **prs_cfg
 )
 
 # =========================================================
-# Display units and plot window
+# Display unit conversion and plot window
 # =========================================================
 display = convert_display_units(
     unit_system,
@@ -727,7 +771,7 @@ add_history_trace(
     oil_disp["dot_size"],
     oil_disp["dot_stride"],
     x_title=x_title,
-    show_legend=True
+    show_legend=True,
 )
 
 add_history_trace(
@@ -741,7 +785,6 @@ add_history_trace(
     gas_disp["dot_size"],
     gas_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 add_history_trace(
@@ -755,7 +798,6 @@ add_history_trace(
     water_disp["dot_size"],
     water_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 add_history_trace(
@@ -769,7 +811,6 @@ add_history_trace(
     wcut_disp["dot_size"],
     wcut_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 add_history_trace(
@@ -783,7 +824,6 @@ add_history_trace(
     gor_disp["dot_size"],
     gor_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 add_history_trace(
@@ -797,7 +837,6 @@ add_history_trace(
     prs_disp["dot_size"],
     prs_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 add_history_trace(
@@ -811,12 +850,11 @@ add_history_trace(
     cum_disp["dot_size"],
     cum_disp["dot_stride"],
     x_title=x_title,
-    show_legend=False
 )
 
 history_fig.update_layout(
     title_text=(
-        f"Artificial Zira History Match – Material-Balanced Synthetic Dataset "
+        f"{field_name} – Material-Balanced Artificial History Match "
         f"({unit_system}, X-axis: {x_axis_mode}, {plot_years} years from {plot_start_year})"
     ),
     title_x=0.5,
@@ -840,32 +878,26 @@ if x_axis_mode == "Years":
 st.plotly_chart(history_fig, use_container_width=True)
 
 # =========================================================
-# Material balance consistency checks
+# Checks
 # =========================================================
 st.subheader("Material Balance / Consistency Checks")
 
-check_col1, check_col2, check_col3, check_col4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
-oil_from_balance = total_liq_measured * (1 - wcut_measured / 100)
-water_from_balance = total_liq_measured * wcut_measured / 100
-gas_from_balance = oil_measured * gor_measured / 1000
+oil_balance = total_liq_measured * (1 - wcut_measured / 100.0)
+water_balance = total_liq_measured * (wcut_measured / 100.0)
+gas_balance = oil_measured * gor_measured / 1000.0
 
-check_col1.metric(
-    "Max oil balance error",
-    f"{np.max(np.abs(oil_measured - oil_from_balance)):.4f} m³/d"
-)
-check_col2.metric(
-    "Max water balance error",
-    f"{np.max(np.abs(water_measured - water_from_balance)):.4f} m³/d"
-)
-check_col3.metric(
-    "Max gas/GOR error",
-    f"{np.max(np.abs(gas_measured - gas_from_balance)):.4f} 10³ m³/d"
-)
-check_col4.metric(
-    "Final Cum Oil",
-    f"{cum_oil_measured[-1]:.3f} MMm³"
-)
+c1.metric("Max oil balance error", f"{np.max(np.abs(oil_measured - oil_balance)):.4f} m³/d")
+c2.metric("Max water balance error", f"{np.max(np.abs(water_measured - water_balance)):.4f} m³/d")
+c3.metric("Max gas/GOR error", f"{np.max(np.abs(gas_measured - gas_balance)):.4f} 10³ m³/d")
+c4.metric("Final water cut", f"{wcut_measured[-1]:.1f}%")
+c5.metric("Final Cum Oil", f"{cum_oil_measured[-1]:.3f} MMm³")
+
+if wcut_measured.max() >= 99:
+    st.warning("Water cut is very close to 100%. Reduce Maximum water cut if you want an earlier-life or mid-life field.")
+else:
+    st.success(f"Water cut is capped below 100%. Maximum measured WCUT = {wcut_measured.max():.1f}%.")
 
 # =========================================================
 # Relative permeability
@@ -874,37 +906,37 @@ st.header("Relative Permeability – Corey Function Playground")
 
 with st.sidebar.expander("Water-Oil Corey Controls", expanded=False):
     st.markdown("**Before History Match**")
-    swc_b = st.slider("WO Before Swc", 0.05, 0.45, key="swc_b", step=0.01)
-    sorw_b = st.slider("WO Before Sorw", 0.05, 0.45, key="sorw_b", step=0.01)
-    krw_end_b = st.slider("WO Before Krw end", 0.10, 1.00, key="krw_end_b", step=0.01)
-    krow_end_b = st.slider("WO Before Kro end", 0.10, 1.00, key="krow_end_b", step=0.01)
-    nw_b = st.slider("WO Before nw", 1.0, 6.0, key="nw_b", step=0.05)
-    no_b = st.slider("WO Before no", 1.0, 6.0, key="no_b", step=0.05)
+    swc_b = st.slider("WO Before Swc", 0.05, 0.45, step=0.01, key="swc_b")
+    sorw_b = st.slider("WO Before Sorw", 0.05, 0.45, step=0.01, key="sorw_b")
+    krw_end_b = st.slider("WO Before Krw end", 0.10, 1.00, step=0.01, key="krw_end_b")
+    krow_end_b = st.slider("WO Before Kro end", 0.10, 1.00, step=0.01, key="krow_end_b")
+    nw_b = st.slider("WO Before nw", 1.0, 6.0, step=0.05, key="nw_b")
+    no_b = st.slider("WO Before no", 1.0, 6.0, step=0.05, key="no_b")
 
     st.markdown("**After History Match**")
-    swc_a = st.slider("WO After Swc", 0.05, 0.45, key="swc_a", step=0.01)
-    sorw_a = st.slider("WO After Sorw", 0.05, 0.45, key="sorw_a", step=0.01)
-    krw_end_a = st.slider("WO After Krw end", 0.10, 1.00, key="krw_end_a", step=0.01)
-    krow_end_a = st.slider("WO After Kro end", 0.10, 1.00, key="krow_end_a", step=0.01)
-    nw_a = st.slider("WO After nw", 1.0, 6.0, key="nw_a", step=0.05)
-    no_a = st.slider("WO After no", 1.0, 6.0, key="no_a", step=0.05)
+    swc_a = st.slider("WO After Swc", 0.05, 0.45, step=0.01, key="swc_a")
+    sorw_a = st.slider("WO After Sorw", 0.05, 0.45, step=0.01, key="sorw_a")
+    krw_end_a = st.slider("WO After Krw end", 0.10, 1.00, step=0.01, key="krw_end_a")
+    krow_end_a = st.slider("WO After Kro end", 0.10, 1.00, step=0.01, key="krow_end_a")
+    nw_a = st.slider("WO After nw", 1.0, 6.0, step=0.05, key="nw_a")
+    no_a = st.slider("WO After no", 1.0, 6.0, step=0.05, key="no_a")
 
 with st.sidebar.expander("Gas-Oil Corey Controls", expanded=False):
     st.markdown("**Before History Match**")
-    sgc_b = st.slider("GO Before Sgc", 0.00, 0.30, key="sgc_b", step=0.01)
-    sorg_b = st.slider("GO Before Sorg", 0.05, 0.45, key="sorg_b", step=0.01)
-    krg_end_b = st.slider("GO Before Krg end", 0.10, 1.00, key="krg_end_b", step=0.01)
-    krog_end_b = st.slider("GO Before Krog end", 0.10, 1.00, key="krog_end_b", step=0.01)
-    ng_b = st.slider("GO Before ng", 1.0, 6.0, key="ng_b", step=0.05)
-    nog_b = st.slider("GO Before nog", 1.0, 6.0, key="nog_b", step=0.05)
+    sgc_b = st.slider("GO Before Sgc", 0.00, 0.30, step=0.01, key="sgc_b")
+    sorg_b = st.slider("GO Before Sorg", 0.05, 0.45, step=0.01, key="sorg_b")
+    krg_end_b = st.slider("GO Before Krg end", 0.10, 1.00, step=0.01, key="krg_end_b")
+    krog_end_b = st.slider("GO Before Krog end", 0.10, 1.00, step=0.01, key="krog_end_b")
+    ng_b = st.slider("GO Before ng", 1.0, 6.0, step=0.05, key="ng_b")
+    nog_b = st.slider("GO Before nog", 1.0, 6.0, step=0.05, key="nog_b")
 
     st.markdown("**After History Match**")
-    sgc_a = st.slider("GO After Sgc", 0.00, 0.30, key="sgc_a", step=0.01)
-    sorg_a = st.slider("GO After Sorg", 0.05, 0.45, key="sorg_a", step=0.01)
-    krg_end_a = st.slider("GO After Krg end", 0.10, 1.00, key="krg_end_a", step=0.01)
-    krog_end_a = st.slider("GO After Krog end", 0.10, 1.00, key="krog_end_a", step=0.01)
-    ng_a = st.slider("GO After ng", 1.0, 6.0, key="ng_a", step=0.05)
-    nog_a = st.slider("GO After nog", 1.0, 6.0, key="nog_a", step=0.05)
+    sgc_a = st.slider("GO After Sgc", 0.00, 0.30, step=0.01, key="sgc_a")
+    sorg_a = st.slider("GO After Sorg", 0.05, 0.45, step=0.01, key="sorg_a")
+    krg_end_a = st.slider("GO After Krg end", 0.10, 1.00, step=0.01, key="krg_end_a")
+    krog_end_a = st.slider("GO After Krog end", 0.10, 1.00, step=0.01, key="krog_end_a")
+    ng_a = st.slider("GO After ng", 1.0, 6.0, step=0.05, key="ng_a")
+    nog_a = st.slider("GO After nog", 1.0, 6.0, step=0.05, key="nog_a")
 
 sw = np.linspace(0, 1, 101)
 sg = np.linspace(0, 1, 101)
@@ -918,7 +950,7 @@ krg_a, krog_a = corey_gas_oil(sg, sgc_a, sorg_a, krg_end_a, krog_end_a, ng_a, no
 tab1, tab2, tab3 = st.tabs([
     "Water-Oil RelPerm",
     "Gas-Oil RelPerm",
-    "Overlay Before vs After"
+    "Overlay Before vs After",
 ])
 
 with tab1:
@@ -927,7 +959,6 @@ with tab1:
     fig_wo.add_trace(go.Scatter(x=sw, y=krw_b, mode="lines", name="KRW before HM"))
     fig_wo.add_trace(go.Scatter(x=sw, y=krow_a, mode="lines", name="KROW after HM", line=dict(dash="dash")))
     fig_wo.add_trace(go.Scatter(x=sw, y=krw_a, mode="lines", name="KRW after HM", line=dict(dash="dash")))
-
     fig_wo.update_layout(
         title="Water-Oil Relative Permeabilities – Corey Function",
         xaxis_title="Sw",
@@ -945,7 +976,6 @@ with tab2:
     fig_go.add_trace(go.Scatter(x=sg, y=krg_b, mode="lines", name="KRG before HM"))
     fig_go.add_trace(go.Scatter(x=sg, y=krog_a, mode="lines", name="KROG after HM", line=dict(dash="dash")))
     fig_go.add_trace(go.Scatter(x=sg, y=krg_a, mode="lines", name="KRG after HM", line=dict(dash="dash")))
-
     fig_go.update_layout(
         title="Gas-Oil Relative Permeabilities – Corey Function",
         xaxis_title="Sg",
@@ -1006,10 +1036,11 @@ with tab3:
     st.plotly_chart(fig_overlay, use_container_width=True)
 
 # =========================================================
-# DataFrames
+# DataFrames and downloads
 # =========================================================
 history_df = pd.DataFrame({
     "Date": dates,
+    "Time_Years": t_years,
     "Total_Liquid_Measured_m3d": total_liq_measured,
     "Total_Liquid_Model_m3d": total_liq_model,
     "Oil_Rate_Measured_m3d": oil_measured,
@@ -1064,21 +1095,18 @@ with st.expander("Show generated data tables"):
     st.subheader("Controls")
     st.dataframe(controls_df, use_container_width=True)
 
-# =========================================================
-# Downloads: Excel and JSON
-# =========================================================
 excel_file = make_excel(history_df, relperm_wo_df, relperm_go_df, controls_df)
 
 st.download_button(
-    label="Download Excel – Artificial Zira Material-Balanced Dataset",
+    label="Download Excel – Generic Field Material-Balanced Dataset",
     data=excel_file,
-    file_name="Zira_MaterialBalanced_HistoryMatch_RelPerm.xlsx",
+    file_name="Generic_Field_MaterialBalanced_HistoryMatch_RelPerm.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
 json_payload = {
-    "app": "Zira Material-Balanced Artificial History Match & RelPerm Generator",
-    "version": "3.0",
+    "app": "Generic Field Material-Balanced Artificial History Match & RelPerm Generator",
+    "version": "4.0",
     "values": current_values,
 }
 
@@ -1087,6 +1115,6 @@ json_bytes = json.dumps(json_payload, indent=2).encode("utf-8")
 st.download_button(
     label="Save Current Settings as JSON",
     data=json_bytes,
-    file_name="Zira_HistoryMatch_Settings.json",
+    file_name="Generic_Field_HistoryMatch_Settings.json",
     mime="application/json",
 )
